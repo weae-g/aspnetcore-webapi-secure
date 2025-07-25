@@ -1,9 +1,0 @@
-{
-    "recommendations": [
-        "ms-dotnettools.csdevkit",
-        "github.copilot",
-        "github.vscode-github-actions",
-        "github.copilot-chat",
-        "github.remotehub"
-    ]
-}
