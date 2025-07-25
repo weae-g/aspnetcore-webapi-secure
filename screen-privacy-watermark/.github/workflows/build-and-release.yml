@@ -1,0 +1,110 @@
+on:
+  workflow_dispatch:
+    inputs:
+      Version:
+        description: "Version number"
+        required: true
+        default: "1.0.1"
+      SelfContained:
+        description: "Create Self-contained Build"
+        required: true
+        type: boolean
+        default: false
+      CreateRelease:
+        description: "Create GitHub Release"
+        required: true
+        type: boolean
+        default: false
+
+name: 🏗️ Build & Release
+run-name: 🏗️ Build & Release v${{ github.event.inputs.Version }}
+
+permissions:
+  contents: write
+
+env:
+  VERSION: ${{ github.event.inputs.Version }}
+  SELF_CONTAINED: ${{ github.event.inputs.SelfContained }}
+  TAG_NAME: v${{ github.event.inputs.Version }}
+
+jobs:
+  build:
+    name: 🏗️ Build v${{ github.event.inputs.Version }}
+    runs-on: windows-2022
+    env:
+      APP_PROJECT_PATH: src\Magdys.ScreenPrivacyWatermark.App\Magdys.ScreenPrivacyWatermark.App.csproj
+      APP_PROJECT_OUTPUT: _temp\app
+      MSI_PROJECT_PATH: src/Magdys.ScreenPrivacyWatermark.Setup/Magdys.ScreenPrivacyWatermark.Setup.wixproj
+      MSI_PROJECT_OUTPUT: _temp\msi
+      MSI_FILE_NAME: SPW-${{github.event.inputs.Version}}-Setup
+
+    steps:
+      - name: 🦺 Validate version format
+        run: |
+          if ('${{ github.event.inputs.Version }}' -notmatch '^\d+\.\d+\.\d+$') {
+              Write-Output "Version format is invalid."
+              exit 1
+          }
+
+      - name: 📥 Checkout code
+        uses: actions/checkout@v4.1.2
+
+      - name: 🛠️ Setup envs
+        run: |
+          echo "APP_PROJECT_OUTPUT=${{ runner.temp }}\app" | Out-File -FilePath $env:GITHUB_ENV -Append
+          echo "MSI_PROJECT_OUTPUT=${{ runner.temp }}\msi" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: 📃 List All env
+        run: Get-ChildItem env:* | Sort-Object -Property Name
+
+      - name: 📦 Cache NuGet packages
+        uses: actions/cache@v4.0.2
+        with:
+          path: ~/.nuget/packages
+          key: ${{ runner.os }}-nuget-${{ hashFiles('**/*.*proj') }}
+          restore-keys: |
+            ${{ runner.os }}-nuget-${{ hashFiles('**/*.*proj') }}
+
+      - name: 🔄 Restore NuGet Packages
+        run: dotnet restore src
+
+      - name: 🏗️ Publish App (framework-dependent)
+        if: ${{ github.event.inputs.SelfContained == 'false' }}
+        run: dotnet publish ${{env.APP_PROJECT_PATH}} -c=Release -o=${{env.APP_PROJECT_OUTPUT}} --p:FileVersion=${{env.VERSION}} --p:AssemblyVersion=${{env.VERSION}} --p:Version=${{env.VERSION}} -p:SourceRevisionId=${{ github.sha }}
+
+      - name: 🏗️ Publish App (self-contained)
+        if: ${{ github.event.inputs.SelfContained == 'true' }}
+        run: dotnet publish ${{env.APP_PROJECT_PATH}} -c=Release -o=${{env.APP_PROJECT_OUTPUT}} --p:FileVersion=${{env.VERSION}} --p:AssemblyVersion=${{env.VERSION}} --p:Version=${{env.VERSION}} -r=win-x64 --self-contained=true -p:SourceRevisionId=${{ github.sha }}
+
+      - name: 🔧 Setup WiX v5
+        run: dotnet tool install --global wix
+
+      - name: 🏭 Build MSI
+        run: dotnet build ${{env.MSI_PROJECT_PATH}} -c=Release -o=${{env.MSI_PROJECT_OUTPUT}} -p:Version=${{env.VERSION}} -p:AppDir=${{env.APP_PROJECT_OUTPUT}} -p:OutputName=${{env.MSI_FILE_NAME}} -p:SourceRevisionId=${{ github.sha }}
+
+      - name: 📤 Upload a Build Artifact
+        if: ${{ github.event.inputs.CreateRelease == 'false' }}
+        uses: actions/upload-artifact@v4.3.1
+        with:
+          name: ${{env.MSI_FILE_NAME}}
+          path: ${{env.MSI_PROJECT_OUTPUT}}\${{env.MSI_FILE_NAME}}.msi
+
+      - name: 🏷️ Create tag v${{ github.event.inputs.Version }}
+        if: ${{ github.event.inputs.CreateRelease == 'true' }}
+        run: |
+          git tag ${{ env.TAG_NAME }}
+          git push origin ${{ env.TAG_NAME }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 📝 Create release draft v${{ github.event.inputs.Version }}
+        if: ${{ github.event.inputs.CreateRelease == 'true' }}
+        run: gh release create ${{ env.TAG_NAME }} --target ${{ github.ref }} --draft --title "${{ env.TAG_NAME }}" --generate-notes --prerelease --draft
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 📤 Upload MSI to release v${{ github.event.inputs.Version }}
+        if: ${{ github.event.inputs.CreateRelease == 'true' }}
+        run: gh release upload ${{ env.TAG_NAME }} ${{env.MSI_PROJECT_OUTPUT}}\${{env.MSI_FILE_NAME}}.msi
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
